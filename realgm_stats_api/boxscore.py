@@ -173,7 +173,92 @@ class BoxscoreScraper:
                     'home_record': home_record,
                     'home_score': home_score
                 })
-        
+
+        return games
+
+    def get_boxscore_links_v2(self, league_resolver, date: str) -> List[Dict[str, str]]:
+        """
+        Get boxscore links using league resolver (new version)
+
+        Args:
+            league_resolver: LeagueResolver instance
+            date: Date string in YYYY-MM-DD format
+
+        Returns:
+            List of game dictionaries with boxscore information
+        """
+        if league_resolver.is_major:
+            # Major leagues use simple URL pattern
+            url = urljoin(self.base_url, f"/{league_resolver.slug}/scores/{date}")
+        else:
+            # International leagues use the complex URL pattern
+            url = urljoin(self.base_url, f"/international/league/{league_resolver.id}/{league_resolver.slug}/scores/{date}")
+
+        response = self.session.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        games = []
+
+        # Find all game tables
+        game_tables = soup.find_all('table', class_='game')
+        for game_table in game_tables:
+            # Check if this game has a boxscore available (skip PREVIEW games)
+            preview_button = game_table.find(string="PREVIEW")
+            if preview_button:
+                continue  # Skip games that only have PREVIEW button
+
+            # Get team information
+            team_details = game_table.find_all('div', class_='team_name')
+            team_records = game_table.find_all('div', class_='team_record')
+            team_scores = game_table.find_all('div', class_='team_score')
+
+            if len(team_details) >= 2 and len(team_records) >= 2 and len(team_scores) >= 2:
+                # Check if team scores have boxscore links (additional safety check)
+                away_score_link = team_scores[0].find('a')
+                if not away_score_link:
+                    continue  # Skip if no boxscore link available
+
+                # Get away team info
+                away_team = team_details[0].find('a').text.strip()
+                away_record = team_records[0].find('a').text.strip('()')
+                away_score = away_score_link.text.strip()
+
+                # Get home team info
+                home_team = team_details[1].find('a').text.strip()
+                home_record = team_records[1].find('a').text.strip('()')
+
+                # Handle home score - it might be in team_scores[1] or team_scores[2]
+                home_score = None
+                if len(team_scores) >= 3:
+                    home_score_link = team_scores[2].find('a')
+                    if home_score_link:
+                        home_score = home_score_link.text.strip()
+
+                if not home_score and len(team_scores) >= 2:
+                    home_score_link = team_scores[1].find('a')
+                    if home_score_link:
+                        home_score = home_score_link.text.strip()
+
+                if not home_score:
+                    continue  # Skip if we can't find home team score
+
+                # Get boxscore link
+                boxscore_link = away_score_link['href']
+                game_id = boxscore_link.split('/')[-1]
+
+                games.append({
+                    'url': urljoin(self.base_url, boxscore_link),
+                    'game_id': game_id,
+                    'date': date,
+                    'away_team': away_team,
+                    'away_record': away_record,
+                    'away_score': away_score,
+                    'home_team': home_team,
+                    'home_record': home_record,
+                    'home_score': home_score,
+                    'matchup': f"{away_team} @ {home_team}"
+                })
+
         return games
 
     def get_upcoming_games(self, league_id: int, date: str, league_name: str = None) -> List[Dict[str, str]]:

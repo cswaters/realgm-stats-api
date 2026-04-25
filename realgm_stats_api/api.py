@@ -10,10 +10,12 @@ import pandas as pd
 from urllib.parse import urljoin
 import re
 import time
+import warnings
 from .boxscore import BoxscoreScraper
 from .depth_chart import DepthChartScraper
 from .rosters import RosterScraper
 from .player import PlayerScraper
+from .resolvers import LeagueResolver, TeamResolver
 
 
 class RealGMStatsAPI:
@@ -38,69 +40,87 @@ class RealGMStatsAPI:
         self.roster_scraper = RosterScraper(self.session, self.base_url)
         self.player_scraper = PlayerScraper(self.session, self.base_url)
     
-    def get_league_stats(self, 
-                        league_id: int = 31,
-                        league_name: str = "Romanian-Divizia-A",
+    def get_league_stats(self,
+                        league: Union[int, str, None] = None,
                         season: str = "2025",
                         stat_type: Union[str, List[str]] = "Averages",
                         qualified: bool = True,
                         prospects: str = "All",
-                        team: str = "All",
+                        team: Union[int, str] = "All",
                         position: str = "All",
                         sort_column: str = "points",
                         sort_order: str = "desc",
                         page: int = 1,
-                        season_type: str = "Regular_Season") -> pd.DataFrame:
+                        season_type: str = "Regular_Season",
+                        # Deprecated parameters for backward compatibility
+                        league_id: Optional[int] = None,
+                        league_name: Optional[str] = None) -> pd.DataFrame:
         """
         Get basketball statistics for a specific league and filters
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
+            league: League identifier - can be ID (int), name (str), or slug (str)
+                   Examples: 54, "Italian Serie A2 Basket", "nba", "WNBA"
             season: Season year (e.g., "2025" for WNBA, "2024-2025" or "2025" for NBA)
             stat_type: Type of stats or list of stat types. Options:
-                - "Averages"
-                - "Totals"
-                - "Per_48"
-                - "Per_40"
-                - "Per_36"
-                - "Per_Minute"
-                - "Minute_Per"
-                - "Misc_Stats"
-                - "Advanced_Stats"
+                - "Averages", "Totals", "Per_48", "Per_40", "Per_36"
+                - "Per_Minute", "Minute_Per", "Misc_Stats", "Advanced_Stats"
             qualified: Whether to show only qualified players
             prospects: Prospect filter ("All", "Pro", "Draft")
-            team: Team filter ("All" or specific team)
+            team: Team identifier - can be ID (int), name (str), or "All"
             position: Position filter ("All", "PG", "SG", "SF", "PF", "C")
             sort_column: Column to sort by
             sort_order: Sort order ("desc" or "asc")
             page: Page number
             season_type: Season type ("Regular_Season")
-        
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             pandas DataFrame containing the statistics. If multiple stat types are requested,
             the DataFrames are merged on player name and team.
         """
+        # Handle backward compatibility
+        if league is None:
+            if league_id is not None or league_name is not None:
+                warnings.warn(
+                    "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                # Use legacy parameters
+                league = league_id if league_id is not None else league_name
+            else:
+                # Default to Romanian league for backward compatibility
+                league = 31
+
+        # Resolve league
+        league_resolver = LeagueResolver(league)
+
+        # Resolve team if not "All"
+        team_resolver = None
+        if team != "All":
+            team_resolver = TeamResolver(team, league_resolver)
+
         # Convert single stat_type to list for consistent handling
         stat_types = [stat_type] if isinstance(stat_type, str) else stat_type
-        
+
         # Validate stat types
         invalid_types = [st for st in stat_types if st not in STAT_TYPES]
         if invalid_types:
             raise ValueError(f"Invalid stat type(s): {invalid_types}. Valid types are: {STAT_TYPES}")
-        
+
         # Get stats for each type
         dfs = []
         for st in stat_types:
-            # Build the URL using the new helper method
-            url = self._build_stats_url(
-                league_id=league_id,
-                league_name=league_name,
+            # Build the URL using the resolver data
+            url = self._build_stats_url_v2(
+                league_resolver=league_resolver,
+                team_resolver=team_resolver,
                 season=season,
                 stat_type=st,
                 qualified=qualified,
                 prospects=prospects,
-                team=team,
                 sort_column=sort_column,
                 position=position,
                 sort_order=sort_order,
@@ -182,6 +202,37 @@ class RealGMStatsAPI:
             else:
                 url_path = f"/international/league/{league_id}/{league_name}/stats/{season}/{stat_type}/{qualified_str}/{prospects}/{sort_column}/{position}/{sort_order}/{page}/{season_type}"
         
+        return urljoin(self.base_url, url_path)
+
+    def _build_stats_url_v2(self, league_resolver: LeagueResolver, team_resolver: Optional[TeamResolver],
+                           season: str, stat_type: str, qualified: bool, prospects: str,
+                           sort_column: str, position: str, sort_order: str, page: int,
+                           season_type: str) -> str:
+        """Build the appropriate URL using resolvers (new version)."""
+
+        if league_resolver.is_major:
+            # Major leagues use simple URL pattern
+            if team_resolver is not None:
+                # Team-specific stats
+                if league_resolver.slug == "wnba":
+                    # WNBA team stats: /wnba/teams/Golden-State-Valkyries/7/Stats
+                    url_path = f"/{league_resolver.slug}/teams/{team_resolver.slug}/{team_resolver.id}/Stats"
+                else:
+                    # NBA team stats: /nba/team/Boston-Celtics/stats/2025/Averages
+                    formatted_season = _format_season_for_league(league_resolver.slug, season)
+                    url_path = f"/{league_resolver.slug}/team/{team_resolver.slug}/stats/{formatted_season}/{stat_type}"
+            else:
+                # League-wide stats
+                formatted_season = _format_season_for_league(league_resolver.slug, season)
+                url_path = f"/{league_resolver.slug}/stats/{formatted_season}/{stat_type}"
+        else:
+            # International leagues use the complex pattern
+            qualified_str = "Qualified" if qualified else "All"
+            if team_resolver is not None:
+                url_path = f"/international/league/{league_resolver.id}/{league_resolver.slug}/team/{team_resolver.slug}/stats/{season}/{stat_type}/{qualified_str}/{prospects}"
+            else:
+                url_path = f"/international/league/{league_resolver.id}/{league_resolver.slug}/stats/{season}/{stat_type}/{qualified_str}/{prospects}/{sort_column}/{position}/{sort_order}/{page}/{season_type}"
+
         return urljoin(self.base_url, url_path)
     
     def _parse_stats_table(self, html: str) -> pd.DataFrame:
@@ -305,21 +356,43 @@ class RealGMStatsAPI:
         except requests.RequestException as e:
             raise Exception(f"Error fetching filter options: {e}")
     
-    def get_team_list(self, 
-                     league_id: int = 31,
-                     league_name: str = "Romanian-Divizia-A",
-                     season: str = "2025") -> List[Dict[str, str]]:
+    def get_team_list(self,
+                     league: Union[int, str, None] = None,
+                     season: str = "2025",
+                     # Deprecated parameters for backward compatibility
+                     league_id: Optional[int] = None,
+                     league_name: Optional[str] = None) -> List[Dict[str, str]]:
         """
         Get list of teams in the league
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
+            league: League ID (int) or name (str) or slug (str)
             season: Season year (e.g., "2025" for WNBA, "2024-2025" or "2025" for NBA)
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             List of team dictionaries with name and ID
         """
+        # Handle backward compatibility
+        if league is None:
+            # Default fallback for backward compatibility
+            if league_id is not None or league_name is not None:
+                warnings.warn(
+                    "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                league = league_id if league_id is not None else league_name
+            else:
+                # Default to Romanian league for backward compatibility
+                league = "Romanian-Divizia-A"
+
+        # Resolve league to get ID and name
+        league_resolver = LeagueResolver(league)
+        league_id = league_resolver.id
+        league_name = league_resolver.name
+
         if _is_major_league(league_name):
             url_path = f"/{league_name.lower()}/teams"
         else:
@@ -379,28 +452,48 @@ class RealGMStatsAPI:
         except requests.RequestException as e:
             raise Exception(f"Error fetching team list: {e}")
 
-    def get_game_dates(self, league_id: int, league_name: str = None) -> List[str]:
+    def get_game_dates(self, league: Union[int, str],
+                       # Deprecated parameters for backward compatibility
+                       league_id: Optional[int] = None, league_name: Optional[str] = None) -> List[str]:
         """
         Get available game dates for a league
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            
+            league: League identifier - can be ID (int), name (str), or slug (str)
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             List of dates in YYYY-MM-DD format
         """
-        return self.boxscore_scraper.get_game_dates(league_id, league_name)
+        # Handle backward compatibility
+        if league_id is not None or league_name is not None:
+            warnings.warn(
+                "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_id if league_id is not None else league_name
+        else:
+            resolved_league = league
 
-    def get_boxscore_links(self, league_id: int, date: str, league_name: str = None) -> List[Dict[str, str]]:
+        # Resolve league
+        league_resolver = LeagueResolver(resolved_league)
+
+        return self.boxscore_scraper.get_game_dates(league_resolver.id, league_resolver.slug)
+
+    def get_boxscore_links(self, league: Union[int, str], date: str,
+                           # Deprecated parameters for backward compatibility
+                           league_id: Optional[int] = None, league_name: Optional[str] = None) -> List[Dict[str, str]]:
         """
         Get boxscore links for games on a specific date
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
+            league: League identifier - can be ID (int), name (str), or slug (str)
             date: Date in YYYY-MM-DD format
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             List of dictionaries containing game information:
             {
@@ -412,17 +505,34 @@ class RealGMStatsAPI:
                 'matchup': str
             }
         """
-        return self.boxscore_scraper.get_boxscore_links(league_id, date, league_name)
+        # Handle backward compatibility
+        if league_id is not None or league_name is not None:
+            warnings.warn(
+                "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_id if league_id is not None else league_name
+        else:
+            resolved_league = league
 
-    def get_upcoming_games(self, league_id: int, date: str, league_name: str = None) -> List[Dict[str, str]]:
+        # Resolve league
+        league_resolver = LeagueResolver(resolved_league)
+
+        return self.boxscore_scraper.get_boxscore_links_v2(league_resolver, date)
+
+    def get_upcoming_games(self, league: Union[int, str], date: str,
+                           # Deprecated parameters for backward compatibility
+                           league_id: Optional[int] = None, league_name: Optional[str] = None) -> List[Dict[str, str]]:
         """
         Get upcoming games for a specific date
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
+            league: League identifier - can be ID (int), name (str), or slug (str)
             date: Date in YYYY-MM-DD format
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             List of dictionaries containing upcoming game information:
             {
@@ -434,7 +544,21 @@ class RealGMStatsAPI:
                 'type': str
             }
         """
-        return self.boxscore_scraper.get_upcoming_games(league_id, date, league_name)
+        # Handle backward compatibility
+        if league_id is not None or league_name is not None:
+            warnings.warn(
+                "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_id if league_id is not None else league_name
+        else:
+            resolved_league = league
+
+        # Resolve league
+        league_resolver = LeagueResolver(resolved_league)
+
+        return self.boxscore_scraper.get_upcoming_games(league_resolver.id, date, league_resolver.slug)
 
     def get_boxscore(self, game_info: Dict[str, str]) -> Dict:
         """
@@ -462,125 +586,241 @@ class RealGMStatsAPI:
         """
         return self.boxscore_scraper.parse_boxscore(game_info)
 
-    def get_boxscore_by_id(self, game_id: str, league_id: int, date: str, league_name: str = None) -> Dict:
+    def get_boxscore_by_id(self, game_id: str, league: Union[int, str], date: str,
+                           # Deprecated parameters for backward compatibility
+                           league_id: Optional[int] = None, league_name: Optional[str] = None) -> Dict:
         """
         Get boxscore data for a specific game ID
-        
+
         Args:
             game_id: Game ID
-            league_id: League ID (not used for major leagues)
+            league: League identifier - can be ID (int), name (str), or slug (str)
             date: Date in YYYY-MM-DD format
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             Dictionary containing detailed boxscore data
         """
-        links = self.get_boxscore_links(league_id, date, league_name)
+        # Handle backward compatibility
+        if league_id is not None or league_name is not None:
+            warnings.warn(
+                "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_id if league_id is not None else league_name
+        else:
+            resolved_league = league
+
+        # Use the updated get_boxscore_links method
+        links = self.get_boxscore_links(resolved_league, date)
         for game in links:
             if game['game_id'] == game_id:
                 return self.get_boxscore(game)
         raise ValueError(f"Game ID {game_id} not found for date {date}")
 
-    def get_boxscores_for_date(self, league_id: int, date: str, league_name: str = None) -> List[Dict]:
+    def get_boxscores_for_date(self, league: Union[int, str], date: str,
+                               # Deprecated parameters for backward compatibility
+                               league_id: Optional[int] = None, league_name: Optional[str] = None) -> List[Dict]:
         """
         Get boxscore data for all games on a specific date
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
+            league: League identifier - can be ID (int), name (str), or slug (str)
             date: Date in YYYY-MM-DD format
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             List of dictionaries containing detailed boxscore data for each game
         """
-        links = self.get_boxscore_links(league_id, date, league_name)
+        # Handle backward compatibility
+        if league_id is not None or league_name is not None:
+            warnings.warn(
+                "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_id if league_id is not None else league_name
+        else:
+            resolved_league = league
+
+        # Use the updated get_boxscore_links method
+        links = self.get_boxscore_links(resolved_league, date)
         return [self.get_boxscore(game) for game in links]
 
-    def get_boxscores_for_date_range(self, league_id: int, start_date: str, end_date: str, league_name: str = None) -> List[Dict]:
+    def get_boxscores_for_date_range(self, league: Union[int, str], start_date: str, end_date: str,
+                                     # Deprecated parameters for backward compatibility
+                                     league_id: Optional[int] = None, league_name: Optional[str] = None) -> List[Dict]:
         """
         Get boxscore data for all games in a date range
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
+            league: League identifier - can be ID (int), name (str), or slug (str)
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             List of dictionaries containing detailed boxscore data for each game
         """
-        all_dates = self.get_game_dates(league_id, league_name)
+        # Handle backward compatibility
+        if league_id is not None or league_name is not None:
+            warnings.warn(
+                "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_id if league_id is not None else league_name
+        else:
+            resolved_league = league
+
+        # Use the updated methods
+        all_dates = self.get_game_dates(resolved_league)
         start = all_dates.index(start_date) if start_date in all_dates else 0
         end = all_dates.index(end_date) + 1 if end_date in all_dates else len(all_dates)
         date_range = all_dates[start:end]
-        
+
         all_boxscores = []
         for date in date_range:
-            boxscores = self.get_boxscores_for_date(league_id, date, league_name)
+            boxscores = self.get_boxscores_for_date(resolved_league, date)
             all_boxscores.extend(boxscores)
             time.sleep(self.boxscore_scraper.rate_limit)  # Respect rate limit
-            
+
         return all_boxscores
 
-    def get_depth_chart(self, 
-                       league_id: int = None,
-                       league_name: str = None,
-                       team_id: int = None,
-                       team_name: str = None,
-                       season: str = "2025") -> Dict:
+    def get_depth_chart(self,
+                       league: Union[int, str, None] = None,
+                       team: Union[int, str, None] = None,
+                       season: str = "2025",
+                       # Deprecated parameters for backward compatibility
+                       league_id: Optional[int] = None,
+                       league_name: Optional[str] = None,
+                       team_id: Optional[int] = None,
+                       team_name: Optional[str] = None) -> Dict:
         """
         Get depth chart for a specific team
-        
+
         Args:
-            league_id: League ID (not required for major leagues)
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            team_id: Team ID
-            team_name: Team name slug
+            league: League identifier - can be ID (int), name (str), or slug (str)
+            team: Team identifier - can be ID (int), name (str), or slug (str)
             season: Season year (e.g., "2025" for WNBA, "2024-2025" or "2025" for NBA)
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+            team_id: [DEPRECATED] Use 'team' parameter instead
+            team_name: [DEPRECATED] Use 'team' parameter instead
+
         Returns:
             Dictionary containing depth chart data
         """
+        # Handle backward compatibility for league
+        if league is None:
+            if league_id is not None or league_name is not None:
+                warnings.warn(
+                    "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                league = league_id if league_id is not None else league_name
+
+        # Handle backward compatibility for team
+        if team is None:
+            if team_id is not None or team_name is not None:
+                warnings.warn(
+                    "team_id and team_name parameters are deprecated. Use 'team' parameter instead.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                team = team_id if team_id is not None else team_name
+
+        # Resolve league and team
+        league_resolver = LeagueResolver(league) if league is not None else None
+        team_resolver = TeamResolver(team, league_resolver) if team is not None and league_resolver is not None else None
+
+        # For backward compatibility, extract individual values
+        resolved_league_id = league_resolver.id if league_resolver else None
+        resolved_league_name = league_resolver.slug if league_resolver else None
+        resolved_team_id = team_resolver.id if team_resolver else None
+        resolved_team_name = team_resolver.slug if team_resolver else None
+
         return self.depth_chart_scraper.get_depth_chart(
-            league_id=league_id,
-            league_name=league_name,
-            team_id=team_id,
-            team_name=team_name,
+            league_id=resolved_league_id,
+            league_name=resolved_league_name,
+            team_id=resolved_team_id,
+            team_name=resolved_team_name,
             season=season
         )
     
     def get_team_depth_charts(self,
-                             league_id: int,
-                             league_name: str,
-                             season: str = "2025") -> Dict[str, Dict]:
+                             league: Union[int, str],
+                             season: str = "2025",
+                             # Deprecated parameters for backward compatibility
+                             league_id: Optional[int] = None,
+                             league_name: Optional[str] = None) -> Dict[str, Dict]:
         """
         Get depth charts for all teams in a league
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
+            league: League identifier - can be ID (int), name (str), or slug (str)
             season: Season year
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             Dictionary mapping team names to their depth charts
         """
+        # Handle backward compatibility
+        if league_id is not None or league_name is not None:
+            warnings.warn(
+                "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_id if league_id is not None else league_name
+        else:
+            resolved_league = league
+
+        # Resolve league
+        league_resolver = LeagueResolver(resolved_league)
+
         return self.depth_chart_scraper.get_team_depth_charts(
-            league_id=league_id,
-            league_name=league_name,
+            league_id=league_resolver.id,
+            league_name=league_resolver.slug,
             season=season
         )
     
-    def get_teams_from_teams_page(self, league_id: int, league_name: str) -> List[Dict]:
+    def get_teams_from_teams_page(self, league: Union[int, str],
+                                  # Deprecated parameters for backward compatibility
+                                  league_id: Optional[int] = None, league_name: Optional[str] = None) -> List[Dict]:
         """
         Get list of teams from the league teams page
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            
+            league: League ID (int) or name (str) or slug (str)
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             List of team dictionaries with id, name, and name_slug
         """
+        # Handle backward compatibility
+        if league_id is not None or league_name is not None:
+            warnings.warn(
+                "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_id if league_id is not None else league_name
+        else:
+            resolved_league = league
+
+        # Resolve league
+        league_resolver = LeagueResolver(resolved_league)
+        league_id = league_resolver.id
+        league_name = league_resolver.slug
+
         if _is_major_league(league_name):
             url_path = f"/{league_name.lower()}/teams"
         else:
@@ -654,14 +894,17 @@ class RealGMStatsAPI:
         except requests.RequestException as e:
             raise Exception(f"Error fetching teams from teams page: {e}")
 
-    def scrape_league_teams(self, league_name: str) -> Dict[str, Dict]:
+    def scrape_league_teams(self, league: Union[int, str, None] = None,
+                          # Deprecated parameters for backward compatibility
+                          league_name: Optional[str] = None) -> Dict[str, Dict]:
         """
         Scrape team information from a league's teams page and return a mapping
         of team names to their IDs and slugs.
-        
+
         Args:
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            
+            league: League ID (int) or name (str) or slug (str)
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             Dictionary mapping team names to their info:
             {
@@ -672,8 +915,19 @@ class RealGMStatsAPI:
                 }
             }
         """
+        # Handle backward compatibility
+        if league_name is not None:
+            warnings.warn(
+                "league_name parameter is deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_name
+        else:
+            resolved_league = league
+
         try:
-            teams = self.get_teams_from_teams_page(league_id=None, league_name=league_name)
+            teams = self.get_teams_from_teams_page(league=resolved_league)
             
             # Create a mapping of team names to their info
             team_mapping = {}
@@ -687,19 +941,33 @@ class RealGMStatsAPI:
             return team_mapping
             
         except Exception as e:
-            raise Exception(f"Error scraping teams for {league_name}: {e}")
+            raise Exception(f"Error scraping teams for {resolved_league}: {e}")
 
-    def print_league_teams(self, league_name: str):
+    def print_league_teams(self, league: Union[int, str, None] = None,
+                         # Deprecated parameters for backward compatibility
+                         league_name: Optional[str] = None):
         """
         Print all teams for a league in a formatted way.
-        
+
         Args:
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
+            league: League ID (int) or name (str) or slug (str)
+            league_name: [DEPRECATED] Use 'league' parameter instead
         """
+        # Handle backward compatibility
+        if league_name is not None:
+            warnings.warn(
+                "league_name parameter is deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_name
+        else:
+            resolved_league = league
+
         try:
-            teams = self.get_teams_from_teams_page(league_id=None, league_name=league_name)
+            teams = self.get_teams_from_teams_page(league=resolved_league)
             
-            print(f'{league_name.upper()} Teams:')
+            print(f'{str(resolved_league).upper()} Teams:')
             print('=' * 50)
             
             for team in teams:
@@ -712,27 +980,42 @@ class RealGMStatsAPI:
         except Exception as e:
             print(f"Error: {e}")
 
-    def get_team_mapping_for_code(self, league_name: str) -> str:
+    def get_team_mapping_for_code(self, league: Union[int, str, None] = None,
+                                # Deprecated parameters for backward compatibility
+                                league_name: Optional[str] = None) -> str:
         """
         Generate Python code for team ID mapping that can be used in the API.
-        
+
         Args:
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            
+            league: League ID (int) or name (str) or slug (str)
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             String containing Python code for the team mapping
         """
+        # Handle backward compatibility
+        if league_name is not None:
+            warnings.warn(
+                "league_name parameter is deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_name
+        else:
+            resolved_league = league
+
         try:
-            team_mapping = self.scrape_league_teams(league_name)
-            
-            code_lines = [f'# {league_name.upper()} team mapping']
-            code_lines.append(f'{league_name.lower()}_team_ids = {{')
-            
+            team_mapping = self.scrape_league_teams(league=resolved_league)
+
+            league_str = str(resolved_league)
+            code_lines = [f'# {league_str.upper()} team mapping']
+            code_lines.append(f'{league_str.lower().replace(" ", "_").replace("-", "_")}_team_ids = {{')
+
             for team_name, info in team_mapping.items():
                 code_lines.append(f'    "{team_name}": {info["id"]},')
-            
+
             code_lines.append('}')
-            
+
             return '\n'.join(code_lines)
             
         except Exception as e:
@@ -778,53 +1061,108 @@ class RealGMStatsAPI:
             output_file=output_file
         )
     
-    def get_team_roster(self, 
-                       league_id: int = None,
-                       league_name: str = None,
-                       team_id: int = None,
-                       team_name: str = None,
-                       season: str = "2025") -> Dict:
+    def get_team_roster(self,
+                       league: Union[int, str, None] = None,
+                       team: Union[int, str, None] = None,
+                       season: str = "2025",
+                       # Deprecated parameters for backward compatibility
+                       league_id: Optional[int] = None,
+                       league_name: Optional[str] = None,
+                       team_id: Optional[int] = None,
+                       team_name: Optional[str] = None) -> Dict:
         """
         Get roster for a specific team
-        
+
         Args:
-            league_id: League ID (not required for major leagues)
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
-            team_id: Team ID
-            team_name: Team name slug
+            league: League identifier - can be ID (int), name (str), or slug (str)
+            team: Team identifier - can be ID (int), name (str), or slug (str)
             season: Season year (e.g., "2025" for WNBA, "2024-2025" or "2025" for NBA)
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+            team_id: [DEPRECATED] Use 'team' parameter instead
+            team_name: [DEPRECATED] Use 'team' parameter instead
+
         Returns:
             Dictionary containing roster data
         """
+        # Handle backward compatibility for league
+        if league is None:
+            if league_id is not None or league_name is not None:
+                warnings.warn(
+                    "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                league = league_id if league_id is not None else league_name
+
+        # Handle backward compatibility for team
+        if team is None:
+            if team_id is not None or team_name is not None:
+                warnings.warn(
+                    "team_id and team_name parameters are deprecated. Use 'team' parameter instead.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                team = team_id if team_id is not None else team_name
+
+        # Resolve league and team
+        league_resolver = LeagueResolver(league) if league is not None else None
+        team_resolver = TeamResolver(team, league_resolver) if team is not None and league_resolver is not None else None
+
+        # For backward compatibility, extract individual values
+        resolved_league_id = league_resolver.id if league_resolver else None
+        resolved_league_name = league_resolver.slug if league_resolver else None
+        resolved_team_id = team_resolver.id if team_resolver else None
+        resolved_team_name = team_resolver.slug if team_resolver else None
+
         return self.roster_scraper.get_team_roster(
-            league_id=league_id,
-            league_name=league_name,
-            team_id=team_id,
-            team_name=team_name,
+            league_id=resolved_league_id,
+            league_name=resolved_league_name,
+            team_id=resolved_team_id,
+            team_name=resolved_team_name,
             season=season
         )
 
     def get_league_rosters(self,
-                          league_id: int,
-                          league_name: str,
+                          league: Union[int, str, None] = None,
                           season: str = "2025",
-                          output_file: Optional[str] = None) -> Dict:
+                          output_file: Optional[str] = None,
+                          # Deprecated parameters for backward compatibility
+                          league_id: Optional[int] = None,
+                          league_name: Optional[str] = None) -> Dict:
         """
         Get rosters for all teams in a league and optionally save to file
-        
+
         Args:
-            league_id: League ID (not used for major leagues)
-            league_name: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
+            league: League identifier - can be ID (int), name (str), or slug (str)
             season: Season year
             output_file: Optional output file path for JSON export
-            
+            league_id: [DEPRECATED] Use 'league' parameter instead
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             Dictionary containing league info and all team rosters
         """
+        # Handle backward compatibility
+        if league is None:
+            if league_id is not None or league_name is not None:
+                warnings.warn(
+                    "league_id and league_name parameters are deprecated. Use 'league' parameter instead.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                league = league_id if league_id is not None else league_name
+
+        # Resolve league
+        league_resolver = LeagueResolver(league) if league is not None else None
+
+        # For backward compatibility, extract individual values
+        resolved_league_id = league_resolver.id if league_resolver else None
+        resolved_league_name = league_resolver.slug if league_resolver else None
+
         return self.roster_scraper.get_league_rosters(
-            league_id=league_id,
-            league_name=league_name,
+            league_id=resolved_league_id,
+            league_name=resolved_league_name,
             season=season,
             output_file=output_file
         )
@@ -891,20 +1229,43 @@ class RealGMStatsAPI:
         """
         return self.player_scraper.get_player_stats_by_leagues(player_id, player_name, leagues)
 
-    def get_league_players(self, league_name: str, season: str = "2025", team: str = None) -> pd.DataFrame:
+    def get_league_players(self, league: Union[int, str, None] = None, season: str = "2025", team: str = None,
+                         # Deprecated parameters for backward compatibility
+                         league_name: Optional[str] = None) -> pd.DataFrame:
         """
         Get all players in a league from the players listing page
-        
+
         Args:
-            league_name: League name (NBA, WNBA)
+            league: League ID (int) or name (str) or slug (str)
             season: Season year (e.g., "2025", "2024")
             team: Optional team filter (e.g., "Chicago-Sky", "Atlanta Hawks")
-            
+            league_name: [DEPRECATED] Use 'league' parameter instead
+
         Returns:
             pandas DataFrame containing all players with columns:
             #, Player, Pos, HT, WT, Age, Current Team, YOS, Pre-Draft Team, Draft Status, Nationality
         """
-        return self.player_scraper.get_league_players(league_name, season, team)
+        # Handle backward compatibility
+        if league_name is not None:
+            warnings.warn(
+                "league_name parameter is deprecated. Use 'league' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            resolved_league = league_name
+        else:
+            resolved_league = league
+
+        # If league is int, resolve to name for player scraper
+        if isinstance(resolved_league, int):
+            from .leagues import get_league_by_id
+            league_info = get_league_by_id(resolved_league)
+            if league_info:
+                resolved_league = league_info['name']
+            else:
+                raise ValueError(f"League ID {resolved_league} not found")
+
+        return self.player_scraper.get_league_players(resolved_league, season, team)
 
     def get_leagues(self, search_query: str = None) -> List[Dict[str, Union[int, str]]]:
         """

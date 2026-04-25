@@ -2,8 +2,25 @@
 
 A Python package that provides a clean API interface for accessing RealGM basketball statistics, replicating the filtering functionality of the RealGM stats pages.
 
+## 🆕 NEW: Smart Resolver System!
+
+**Major API improvement**: All methods now accept a single `league` parameter instead of requiring both `league_id` and `league_name`!
+
+```python
+# ❌ Old way (still works with deprecation warning)
+api.get_league_stats(league_id=54, league_name="Italian-Serie-A2-Basket")
+
+# ✅ New way - much cleaner!
+api.get_league_stats(league=54)  # Use ID
+api.get_league_stats(league="Italian Serie A2 Basket")  # Use name
+api.get_league_stats(league="Italian-Serie-A2-Basket")  # Use slug
+
+# Works with ALL methods: rosters, stats, boxscores, teams, etc.
+```
+
 ## Features
 
+- ✅ **🆕 Smart Resolver System**: Single parameter for leagues - use ID, name, or slug
 - ✅ Fetch basketball statistics for any league on RealGM
 - ✅ Filter by season, stat type, position, team, prospects, and more
 - ✅ Export data to CSV, JSON, or pandas DataFrame
@@ -99,13 +116,20 @@ from realgm_stats_api import create_api_client
 # Create API client
 api = create_api_client()
 
-# Get Romanian Divizia A stats
+# Get Romanian Divizia A stats - NEW CLEAN SYNTAX!
 stats_df = api.get_league_stats(
-    league_id=31,
-    league_name="Romanian-Divizia-A",
+    league=31,  # Using just league ID
     season="2025",
     stat_type="Averages",
     position="PG"  # Point guards only
+)
+
+# OR use league name
+stats_df = api.get_league_stats(
+    league="Romanian-Divizia-A",  # Using just league name
+    season="2025",
+    stat_type="Averages",
+    position="PG"
 )
 
 print(stats_df.head())
@@ -117,9 +141,9 @@ from realgm_stats_api import RealGMStatsAPI
 
 api = RealGMStatsAPI()
 
-# Get NBA stats
+# Get NBA stats - NEW CLEAN SYNTAX!
 nba_stats = api.get_league_stats(
-    league_name="nba",
+    league="nba",  # Just league name - much cleaner!
     season="2025",
     stat_type="Averages",
     team="All"  # or specific team like "Boston Celtics"
@@ -127,7 +151,7 @@ nba_stats = api.get_league_stats(
 
 # Get WNBA team stats
 wnba_team_stats = api.get_league_stats(
-    league_name="wnba",
+    league="wnba",  # Just league name
     season="2025",
     stat_type="Averages",
     team="Golden State Valkyries"  # Use display name
@@ -135,22 +159,21 @@ wnba_team_stats = api.get_league_stats(
 
 # Get WNBA roster
 roster = api.get_team_roster(
-    league_name="wnba",
-    team_id=7,
-    team_name="Golden-State-Valkyries",  # Use slug
+    league="wnba",  # Just league name
+    team=7,  # Just team ID - cleaner!
     season="2025"
 )
 
 # Get all WNBA teams info
-teams = api.scrape_league_teams("wnba")
+teams = api.scrape_league_teams(league="wnba")  # New syntax
 for name, info in teams.items():
     print(f"{name}: ID={info['id']}, Slug={info['slug']}")
 ```
 
 #### Boxscore Data
 ```python
-# Get boxscore links for a date (automatically skips preview games)
-links = api.get_boxscore_links(54, "2025-09-21", "Italian-Serie-A2-Basket")
+# Get boxscore links for a date (automatically skips preview games) - NEW SYNTAX!
+links = api.get_boxscore_links(league=54, date="2025-09-21")  # Much cleaner!
 print(f"Found {len(links)} completed games")
 
 # Get boxscore for a specific game
@@ -162,19 +185,17 @@ boxscore = api.get_boxscore({
     'home_team': 'L.A. Sparks'
 })
 
-# Get all boxscores for a date (only completed games)
+# Get all boxscores for a date (only completed games) - NEW SYNTAX!
 boxscores = api.get_boxscores_for_date(
-    league_id=54,
-    date="2025-09-21",
-    league_name="Italian-Serie-A2-Basket"
+    league=54,  # Just league ID - much cleaner!
+    date="2025-09-21"
 )
 
-# Get boxscores for a date range
+# Get boxscores for a date range - NEW SYNTAX!
 boxscores = api.get_boxscores_for_date_range(
-    league_id=54,
+    league=54,  # Just league ID
     start_date="2025-09-14",
-    end_date="2025-09-26",
-    league_name="Italian-Serie-A2-Basket"
+    end_date="2025-09-26"
 )
 ```
 
@@ -206,40 +227,40 @@ print(f"WNBA seasons: {len(wnba_player['stats']['WNBA'])}")
 
 ### Command Line
 
-#### International Leagues
+#### International Leagues - NEW CLEAN SYNTAX!
 ```bash
-# Get stats for Romanian Divizia A
-realgm-stats --league-id 31 --league-name "Romanian-Divizia-A"
+# Get stats for Romanian Divizia A - much simpler now!
+realgm-stats --league 31
+
+# OR use league name
+realgm-stats --league "Romanian-Divizia-A"
 
 # Filter by position
-realgm-stats --league-id 31 --league-name "Romanian-Divizia-A" --position PG
+realgm-stats --league 31 --position PG
 
 # Export to CSV
-realgm-stats --league-id 31 --league-name "Romanian-Divizia-A" --output stats.csv
+realgm-stats --league 31 --output stats.csv
 
 # List available teams
-realgm-stats --league-id 31 --league-name "Romanian-Divizia-A" --list-teams
+realgm-stats --league 31 --list-teams
 
-# Get depth chart for a specific team
-realgm-stats --league-id 62 --league-name "Puerto-Rican-BSN" --team-id 327 --team-name "Mets-de-Guaynabo" --depth-chart
+# Get depth chart for a specific team - NEW SYNTAX!
+realgm-stats --league 62 --team 327 --depth-chart
 
 # Get depth charts for all teams in a league
-realgm-stats --league-id 62 --league-name "Puerto-Rican-BSN" --all-depth-charts --output depth_charts.json
+realgm-stats --league 62 --all-depth-charts --output depth_charts.json
 
 # Get depth charts for all teams using teams page and auto-save
-realgm-stats --league-id 15 --league-name "German-BBL" --league-depth-charts
+realgm-stats --league 15 --league-depth-charts
 
 # List all teams from the teams page
-realgm-stats --league-id 15 --league-name "German-BBL" --list-league-teams
+realgm-stats --league 15 --list-league-teams
 
 # Get rosters for all teams using teams page and auto-save
-realgm-stats --league-id 15 --league-name "German-BBL" --league-rosters
+realgm-stats --league 15 --league-rosters
 
 # Get roster for a specific team
-realgm-stats --league-id 15 --league-name "German-BBL" --team-id 142 --team-name "ALBA-Berlin" --roster
-
-# Get rosters for all teams using teams page and auto-save
-realgm-stats --league-id 15 --league-name "German-BBL" --league-rosters
+realgm-stats --league 15 --team 142 --roster
 
 # Get player profile only
 realgm-stats --player-id 80999 --player-name "Elijah-Stewart" --player-profile
@@ -251,19 +272,19 @@ realgm-stats --player-id 80999 --player-name "Elijah-Stewart" --player --leagues
 realgm-stats --player-id 3000070 --player-name "Allisha-Gray" --player --leagues "WNBA"
 ```
 
-#### NBA and WNBA
+#### NBA and WNBA - NEW CLEAN SYNTAX!
 ```bash
-# Get NBA stats
-realgm-stats --league-name nba --season 2025 --stat-type Averages
+# Get NBA stats - much simpler!
+realgm-stats --league nba --season 2025 --stat-type Averages
 
 # Get WNBA team stats
-realgm-stats --league-name wnba --season 2025 --team "Golden State Valkyries"
+realgm-stats --league wnba --season 2025 --team "Golden State Valkyries"
 
-# Get WNBA roster
-realgm-stats --league-name wnba --team-id 7 --team-name "Golden-State-Valkyries" --roster
+# Get WNBA roster - cleaner syntax!
+realgm-stats --league wnba --team 7 --roster
 
 # Get WNBA boxscores for a date
-realgm-stats --league-name wnba --date 2015-06-14 --boxscores
+realgm-stats --league wnba --date 2015-06-14 --boxscores
 ```
 
 ### Player Examples
@@ -325,17 +346,16 @@ italian_leagues = api.get_leagues("Italian")
 cup_leagues = api.get_leagues("Cup")
 ```
 
-##### `get_league_stats()`
+##### `get_league_stats()` - NEW RESOLVER SYSTEM!
 
 ```python
 get_league_stats(
-    league_id: int = 31,
-    league_name: str = "Romanian-Divizia-A",
+    league: Union[int, str] = None,  # 🆕 Single parameter - much cleaner!
     season: str = "2025",
     stat_type: str = "Averages",
     qualified: bool = True,
     prospects: str = "All",
-    team: str = "All", 
+    team: str = "All",
     position: str = "All",
     sort_column: str = "points",
     sort_order: str = "desc",
@@ -345,8 +365,7 @@ get_league_stats(
 ```
 
 **Parameters:**
-- `league_id`: League ID number (not required for NBA/WNBA)
-- `league_name`: URL-friendly league name (e.g., "nba", "wnba", "Romanian-Divizia-A")
+- `league`: 🆕 League ID (int) OR name (str) OR slug (str) - ONE parameter for everything!
 - `season`: Season year (e.g., "2025" for WNBA, "2024-2025" or "2025" for NBA)
 - `stat_type`: One of "Averages", "Totals", "Per_48", "Per_40", "Per_36", "Per_Minute", "Minute_Per", "Misc_Stats", "Advanced_Stats"
 - `qualified`: Whether to show only qualified players
@@ -356,16 +375,16 @@ get_league_stats(
 - `sort_column`: Column name to sort by
 - `sort_order`: "desc" or "asc"
 
-##### `scrape_league_teams()`
+##### `scrape_league_teams()` - NEW RESOLVER SYSTEM!
 
 ```python
-scrape_league_teams(league_name: str) -> Dict[str, Dict]
+scrape_league_teams(league: Union[int, str]) -> Dict[str, Dict]  # 🆕 Clean syntax!
 ```
 
 Get all team information (names, IDs, slugs) for a league.
 
 **Parameters:**
-- `league_name`: League name slug (e.g., "nba", "wnba", "Romanian-Divizia-A")
+- `league`: 🆕 League ID (int) OR name (str) OR slug (str) - ONE parameter!
 
 **Returns:**
 ```python
@@ -775,15 +794,15 @@ Get complete player information including profile and stats for specified league
 
 ## Examples
 
-### Get WNBA Team Stats
+### 🆕 Get WNBA Team Stats - New Resolver System
 ```python
 from realgm_stats_api import RealGMStatsAPI
 
 api = RealGMStatsAPI()
 
-# Get stats for Golden State Valkyries
+# Get stats for Golden State Valkyries - NEW CLEAN SYNTAX!
 stats = api.get_league_stats(
-    league_name="wnba",
+    league="wnba",  # 🆕 Just league name - much cleaner!
     season="2025",
     stat_type="Averages",
     team="Golden State Valkyries"  # Use display name
@@ -792,13 +811,12 @@ stats = api.get_league_stats(
 print(stats.head())
 ```
 
-### Get WNBA Roster
+### 🆕 Get WNBA Roster - New Resolver System
 ```python
-# Get roster for Golden State Valkyries
+# Get roster for Golden State Valkyries - NEW CLEAN SYNTAX!
 roster = api.get_team_roster(
-    league_name="wnba",
-    team_id=7,
-    team_name="Golden-State-Valkyries",  # Use slug
+    league="wnba",  # 🆕 Just league name
+    team=7,         # 🆕 Just team ID - much cleaner!
     season="2025"
 )
 
@@ -806,16 +824,16 @@ for player in roster.get("roster", []):
     print(f"{player['name']} - {player['position']}")
 ```
 
-### Get All WNBA Teams
+### 🆕 Get All WNBA Teams - New Resolver System
 ```python
-# Get all WNBA teams info
-teams = api.scrape_league_teams("wnba")
+# Get all WNBA teams info - NEW SYNTAX!
+teams = api.scrape_league_teams(league="wnba")  # 🆕 Clean parameter
 
 for name, info in teams.items():
     print(f"{name}: ID={info['id']}, Slug={info['slug']}")
 
-# Generate Python code for team mapping
-code = api.get_team_mapping_for_code("wnba")
+# Generate Python code for team mapping - NEW SYNTAX!
+code = api.get_team_mapping_for_code(league="wnba")  # 🆕 Clean parameter
 print(code)
 ```
 
@@ -839,10 +857,9 @@ for team_key, team_stats in boxscore['player_stats'].items():
 
 ### Download All WNBA Rosters
 ```python
-# Download all WNBA rosters
+# Download all WNBA rosters - NEW CLEAN SYNTAX!
 rosters = api.get_league_rosters(
-    league_id=1,  # Not used for WNBA
-    league_name="wnba",
+    league="wnba",  # 🆕 Just league name - much simpler!
     season="2025",
     output_file="wnba_rosters_2025.json"
 )
@@ -890,34 +907,34 @@ if not wnba_player['stats']['WNBA'].empty:
 
 ## Command Line Examples
 
-### WNBA Examples
+### 🆕 WNBA Examples - New Clean Syntax
 ```bash
-# Get WNBA league stats
-realgm-stats --league-name wnba --season 2025 --stat-type Averages
+# Get WNBA league stats - much simpler!
+realgm-stats --league wnba --season 2025 --stat-type Averages
 
 # Get specific team stats
-realgm-stats --league-name wnba --season 2025 --team "Golden State Valkyries"
+realgm-stats --league wnba --season 2025 --team "Golden State Valkyries"
 
-# Get team roster
-realgm-stats --league-name wnba --team-id 7 --team-name "Golden-State-Valkyries" --roster
+# Get team roster - cleaner!
+realgm-stats --league wnba --team 7 --roster
 
 # Get boxscores for a date
-realgm-stats --league-name wnba --date 2015-06-14 --boxscores
+realgm-stats --league wnba --date 2015-06-14 --boxscores
 
 # List all WNBA teams
-realgm-stats --league-name wnba --list-league-teams
+realgm-stats --league wnba --list-league-teams
 ```
 
-### NBA Examples
+### 🆕 NBA Examples - New Clean Syntax
 ```bash
-# Get NBA league stats
-realgm-stats --league-name nba --season 2025 --stat-type Averages
+# Get NBA league stats - much simpler!
+realgm-stats --league nba --season 2025 --stat-type Averages
 
 # Get specific team stats
-realgm-stats --league-name nba --season 2025 --team "Boston Celtics"
+realgm-stats --league nba --season 2025 --team "Boston Celtics"
 
-# Get team roster
-realgm-stats --league-name nba --team-id 2 --team-name "Boston-Celtics" --roster
+# Get team roster - cleaner!
+realgm-stats --league nba --team 2 --roster
 ```
 
 ## Team Name Mapping
@@ -929,15 +946,42 @@ For NBA and WNBA, you need to use the correct team names and IDs:
 - Use slugs for rosters: `"Golden-State-Valkyries"`
 - Use correct team IDs: `7` for Golden State Valkyries
 
-### Getting Team Info
+### 🆕 Getting Team Info - New Syntax
 ```python
-# Get all team info for any league
-teams = api.scrape_league_teams("wnba")  # or "nba"
+# Get all team info for any league - NEW CLEAN SYNTAX!
+teams = api.scrape_league_teams(league="wnba")  # 🆕 Clean parameter
+# OR use league ID
+teams = api.scrape_league_teams(league=164)  # WNBA league ID
+
 for name, info in teams.items():
     print(f"{name}: ID={info['id']}, Slug={info['slug']}")
 ```
 
 ## Recent Improvements
+
+### 🆕 v0.3.0 - Smart Resolver System (NEW!)
+
+- **🎯 Revolutionary API Design**: Single `league` parameter replaces `league_id` + `league_name`
+- **🧠 Smart Input Detection**: Automatically detects if input is ID (int), name (str), or slug (str)
+- **🔄 Backward Compatibility**: Old parameters still work with deprecation warnings
+- **🚀 Cleaner Code**: Dramatically simplified method calls across entire API
+- **⚡ Better Performance**: Cached resolution for faster repeated calls
+
+#### Key Improvements:
+```python
+# ❌ Old way (verbose and error-prone)
+api.get_league_stats(league_id=54, league_name="Italian-Serie-A2-Basket")
+
+# ✅ New way (clean and intuitive)
+api.get_league_stats(league=54)  # Use ID
+api.get_league_stats(league="Italian Serie A2 Basket")  # Use name
+api.get_league_stats(league="Italian-Serie-A2-Basket")  # Use slug
+
+# Works with ALL methods: rosters, boxscores, teams, stats, etc.
+api.get_team_roster(league="wnba", team=7)
+api.scrape_league_teams(league="NBA")
+api.get_boxscore_links(league=54, date="2025-01-27")
+```
 
 ### v0.2.0 - Enhanced Boxscore Handling & League Discovery
 
@@ -950,12 +994,16 @@ for name, info in teams.items():
 
 ### Key Features Added:
 ```python
-# League discovery
+# 🆕 Smart Resolver System (v0.3.0)
+api.get_league_stats(league=54)  # Clean syntax with ID
+api.get_league_stats(league="Italian Serie A2 Basket")  # Or name
+
+# League discovery (v0.2.0)
 leagues = api.get_leagues("Italian")  # Search functionality
 all_leagues = api.get_leagues()       # Get all leagues
 
-# Smart boxscore filtering (skips unplayed games automatically)
-links = api.get_boxscore_links(54, "2025-09-21", "Italian-Serie-A2-Basket")
+# Smart boxscore filtering (v0.2.0) - NOW WITH CLEAN SYNTAX!
+links = api.get_boxscore_links(league=54, date="2025-09-21")  # 🆕 Much cleaner!
 ```
 
 ## Error Handling
